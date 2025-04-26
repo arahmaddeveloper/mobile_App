@@ -1,10 +1,11 @@
+
  "use client";
 
-import * as React from "react"; // Added missing React import
-import type { FC } from "react";
+import React, { FC } from "react"; // Ensured React is imported
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, isSameMonth, getDay, addHours, startOfDay } from "date-fns";
+import { CheckSquare } from 'lucide-react'; // Added CheckSquare
 
-import type { CalendarEvent } from "@/lib/types";
+import type { CalendarEvent, TodoItem } from "@/lib/types"; // Added TodoItem
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -13,23 +14,32 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 interface CalendarWeekViewProps {
   date: Date;
   events: CalendarEvent[];
+  todos: TodoItem[]; // Added todos prop
   onEventClick: (event: CalendarEvent) => void;
-  onDateClick: (date: Date) => void; // For navigating to day view
+  onDateClick: (date: Date) => void;
+  onTodoClick: (todo: TodoItem) => void; // Added handler
 }
 
-const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClick, onDateClick }) => {
-  const weekStart = startOfWeek(date, { weekStartsOn: 0 }); // Sunday start
+const CalendarWeekView: FC<CalendarWeekViewProps> = ({
+    date,
+    events,
+    todos, // Destructure todos
+    onEventClick,
+    onDateClick,
+    onTodoClick, // Destructure handler
+}) => {
+  const weekStart = startOfWeek(date, { weekStartsOn: 0 });
   const weekEnd = endOfWeek(date, { weekStartsOn: 0 });
   const days = eachDayOfInterval({ start: weekStart, end: weekEnd });
   const currentMonth = date.getMonth();
 
-  const dayStartHour = startOfDay(new Date()); // Reference for hours
+  const dayStartHour = startOfDay(new Date());
   const hours = Array.from({ length: 24 }, (_, i) => addHours(dayStartHour, i));
-  const hourHeight = 60; // pixels per hour
+  const hourHeight = 60;
 
-  const getEventPosition = (event: CalendarEvent, dayIndex: number): { top: number; height: number } | null => {
+  const getEventPosition = (event: CalendarEvent): { top: number; height: number } | null => {
      if (event.allDay || !event.startTime) {
-       return null; // All-day events handled separately
+       return null;
      }
 
      const [startHour, startMinute] = event.startTime.split(':').map(Number);
@@ -40,7 +50,7 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
        const [endHour, endMinute] = event.endTime.split(':').map(Number);
        endTimeInMinutes = endHour * 60 + endMinute;
      } else {
-       endTimeInMinutes = startTimeInMinutes + 60; // Default 1 hour
+       endTimeInMinutes = startTimeInMinutes + 60;
      }
 
      if (endTimeInMinutes <= startTimeInMinutes) {
@@ -50,13 +60,16 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
      const top = (startTimeInMinutes / 60) * hourHeight;
      const height = ((endTimeInMinutes - startTimeInMinutes) / 60) * hourHeight;
 
-     return { top, height: Math.max(height, 15) }; // Min height
+     return { top, height: Math.max(height, 15) };
    };
 
 
   const eventsByDay = days.map(day =>
     events.filter(event => isSameDay(new Date(event.date + 'T00:00:00'), day))
   );
+  const todosByDay = days.map(day => // Filter todos by day
+     todos.filter(todo => isSameDay(new Date(todo.date + 'T00:00:00'), day))
+   );
 
   const allDayEventsByDay = eventsByDay.map(dayEvents => dayEvents.filter(e => e.allDay));
   const timedEventsByDay = eventsByDay.map(dayEvents => dayEvents.filter(e => !e.allDay && e.startTime));
@@ -64,15 +77,15 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
 
   return (
     <Card className="h-full flex flex-col">
-       <CardHeader className="pb-2">
+       <CardHeader className="pb-2 flex-shrink-0"> {/* Prevent header shrinking */}
         <CardTitle>Week of {format(weekStart, "MMMM d")} - {format(weekEnd, "MMMM d, yyyy")}</CardTitle>
         {/* Header Row */}
         <div className="grid grid-cols-[auto_repeat(7,1fr)] border-b mt-2 sticky top-0 bg-card z-10">
-          <div className="text-xs text-muted-foreground w-12 pr-2"></div> {/* Time column spacer */}
+          <div className="text-xs text-muted-foreground w-12 pr-2"></div>
            {days.map((day) => (
             <div
               key={day.toISOString()}
-              className="text-center p-2 border-l cursor-pointer hover:bg-accent/10"
+              className="text-center p-2 border-l cursor-pointer hover:bg-accent/10 transition-colors"
               onClick={() => onDateClick(day)}
                role="button"
                tabIndex={0}
@@ -90,15 +103,16 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
             </div>
           ))}
         </div>
-         {/* All Day Events Row */}
-         <div className="grid grid-cols-[auto_repeat(7,1fr)] border-b min-h-[4rem]">
+         {/* All Day / Todo Row */}
+         <div className="grid grid-cols-[auto_repeat(7,1fr)] border-b min-h-[5rem]"> {/* Increased min-height */}
             <div className="text-xs text-muted-foreground w-12 pr-2 flex items-center justify-end">All-day</div>
             {days.map((day, dayIndex) => (
-              <div key={`allday-${day.toISOString()}`} className="border-l p-1 space-y-1 overflow-hidden">
+              <div key={`allday-${day.toISOString()}`} className="border-l p-1 space-y-1 overflow-y-auto max-h-[7rem]"> {/* Added scroll and max-height */}
+                  {/* All-Day Events */}
                   {allDayEventsByDay[dayIndex].map(event => (
                       <div
                           key={event.id}
-                          className="p-1 px-2 rounded bg-accent/20 text-accent-foreground text-xs cursor-pointer hover:bg-accent/30 truncate"
+                          className="p-1 px-2 rounded bg-accent/20 text-accent-foreground text-xs cursor-pointer hover:bg-accent/30 truncate transition-colors"
                           onClick={() => onEventClick(event)}
                           role="button"
                           tabIndex={0}
@@ -108,6 +122,28 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
                           {event.title}
                       </div>
                   ))}
+                   {/* Todo Items */}
+                   {todosByDay[dayIndex].map(todo => (
+                        <div
+                          key={todo.id}
+                          className={cn(
+                             "p-1 px-2 rounded bg-secondary/50 text-secondary-foreground text-xs cursor-pointer hover:bg-secondary/70 truncate transition-colors flex items-center",
+                             todo.completed && "line-through opacity-70"
+                           )}
+                          onClick={() => onTodoClick(todo)} // Use onTodoClick
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Todo on ${format(day, "MMMM d")}: ${todo.title}${todo.completed ? ' (Completed)' : ''}`}
+                          title={todo.title}
+                        >
+                           <CheckSquare className={cn("h-3 w-3 mr-1 flex-shrink-0", todo.completed ? "text-green-600" : "text-muted-foreground")} />
+                           {todo.title}
+                        </div>
+                   ))}
+                   {/* Show placeholder if no items */}
+                    {allDayEventsByDay[dayIndex].length === 0 && todosByDay[dayIndex].length === 0 && (
+                       <div className="text-xs text-muted-foreground italic p-1">No all-day items</div>
+                   )}
               </div>
             ))}
           </div>
@@ -120,7 +156,7 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
               {hours.map((hour, hourIndex) => (
                 <React.Fragment key={`timegrid-${format(hour, 'HH:mm')}`}>
                   <div className="row-start-${hourIndex + 1} text-right pr-2 text-xs text-muted-foreground pt-[-2px] w-12" style={{ height: `${hourHeight}px` }}>
-                    {hourIndex > 0 ? format(hour, 'ha') : ''}
+                    {hourIndex > 0 ? format(hour, 'ha').toLowerCase() : ''}
                   </div>
                    {days.map((_, dayIndex) => (
                      <div
@@ -137,15 +173,15 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
 
              {/* Timed Events Layer */}
              {days.map((day, dayIndex) => (
-                 <div key={`events-${day.toISOString()}`} className="col-start-${dayIndex + 2} row-start-1 row-span-[24] relative">
+                 <div key={`events-${day.toISOString()}`} className="col-start-${dayIndex + 2} row-start-1 row-span-[25] relative"> {/* Extend row-span */}
                     {timedEventsByDay[dayIndex].map(event => {
-                       const position = getEventPosition(event, dayIndex);
+                       const position = getEventPosition(event); // Removed dayIndex as it's not used in getEventPosition
                        if (!position) return null;
 
                        return (
                           <div
                             key={event.id}
-                            className="absolute left-1 right-1 p-1 rounded bg-primary text-primary-foreground shadow-md cursor-pointer hover:bg-primary/90 overflow-hidden z-10"
+                            className="absolute left-1 right-1 p-1 rounded bg-primary text-primary-foreground shadow-md cursor-pointer hover:bg-primary/90 overflow-hidden z-10 transition-colors"
                             style={{ top: `${position.top}px`, height: `${position.height}px` }}
                             onClick={() => onEventClick(event)}
                             role="button"
@@ -153,9 +189,9 @@ const CalendarWeekView: FC<CalendarWeekViewProps> = ({ date, events, onEventClic
                             aria-label={`Event on ${format(day, "MMMM d")} from ${event.startTime}${event.endTime ? ` to ${event.endTime}`: ''}: ${event.title}`}
                             title={`${event.title} (${event.startTime}${event.endTime ? ` - ${event.endTime}` : ''})`}
                           >
-                             <p className="font-semibold text-[10px] leading-tight truncate">{event.title}</p>
-                             <p className="text-[9px] leading-tight truncate">{event.startTime}{event.endTime ? ` - ${event.endTime}` : ''}</p>
-                              {position.height > 30 && event.description && <p className="text-[9px] mt-0.5 opacity-80 truncate">{event.description}</p>}
+                             {position.height > 18 && <p className="font-semibold text-[10px] leading-tight truncate">{event.title}</p>}
+                             {position.height > 28 && <p className="text-[9px] leading-tight truncate">{event.startTime}{event.endTime ? ` - ${event.endTime}` : ''}</p>}
+                              {position.height > 40 && event.description && <p className="text-[9px] mt-0.5 opacity-80 truncate">{event.description}</p>}
                           </div>
                        );
                     })}

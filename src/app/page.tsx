@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { format, startOfDay } from "date-fns";
-import { Calendar as CalendarIcon, PlusCircle, Settings } from "lucide-react";
+import { Calendar as CalendarIcon, PlusCircle, ListTodo } from "lucide-react"; // Added ListTodo
 
-import type { CalendarEvent } from "@/lib/types";
+import type { CalendarEvent, TodoItem } from "@/lib/types"; // Added TodoItem
 import { getEvents, addEvent, updateEvent, deleteEvent, getEventsForDate, getEventsForWeek, getEventsForMonth } from "@/lib/events";
+import { getTodos, addTodo, updateTodo, deleteTodo, getTodosForDate, toggleTodoCompletion } from "@/lib/todos"; // Added todo imports
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -14,36 +15,42 @@ import { EventForm } from "@/components/event-form";
 import CalendarMonthView from "@/components/calendar-month-view";
 import CalendarWeekView from "@/components/calendar-week-view";
 import CalendarDayView from "@/components/calendar-day-view";
+import { TodoForm } from "@/components/todo-form"; // Added TodoForm import
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
 
 
 type View = "month" | "week" | "day";
 
-export default function ARCalendar() { // Changed component name
+export default function ARCalendar() {
   const [selectedDate, setSelectedDate] = useState<Date>(startOfDay(new Date()));
   const [currentView, setCurrentView] = useState<View>("month");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]); // Added state for todos
   const [isEventFormOpen, setIsEventFormOpen] = useState(false);
+  const [isTodoFormOpen, setIsTodoFormOpen] = useState(false); // Added state for todo form
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [selectedTodo, setSelectedTodo] = useState<TodoItem | null>(null); // Added state for selected todo
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
-  // Load events from local storage on mount
+  // Load events and todos from local storage on mount
   useEffect(() => {
+    setIsLoading(true);
     try {
        setEvents(getEvents());
+       setTodos(getTodos()); // Load todos
     } catch (error) {
-        console.error("Failed to load events:", error);
+        console.error("Failed to load data:", error);
         toast({
-            title: "Error Loading Events",
-            description: "Could not load events from local storage.",
+            title: "Error Loading Data",
+            description: "Could not load events or todos from local storage.",
             variant: "destructive",
         });
     } finally {
         setIsLoading(false);
     }
-  }, [toast]); // Add toast dependency
+  }, [toast]);
 
   const handleDateChange = (date: Date | undefined) => {
     if (date) {
@@ -56,10 +63,40 @@ export default function ARCalendar() { // Changed component name
     setIsEventFormOpen(true);
   };
 
+   const handleAddTodoClick = () => {
+     setSelectedTodo(null); // Ensure creating a new todo
+     setIsTodoFormOpen(true);
+   };
+
   const handleEventClick = (event: CalendarEvent) => {
     setSelectedEvent(event);
     setIsEventFormOpen(true);
   };
+
+   const handleTodoClick = (todo: TodoItem) => {
+     setSelectedTodo(todo);
+     setIsTodoFormOpen(true);
+   };
+
+   const handleTodoToggle = (todoId: string) => {
+       try {
+           const updatedTodo = toggleTodoCompletion(todoId);
+            if (updatedTodo) {
+               setTodos(prevTodos => prevTodos.map(t => t.id === updatedTodo.id ? updatedTodo : t));
+               toast({ title: "Todo Updated", description: `"${updatedTodo.title}" marked as ${updatedTodo.completed ? 'complete' : 'incomplete'}.` });
+           } else {
+                throw new Error("Todo not found for toggling.")
+           }
+       } catch (error) {
+           console.error("Failed to toggle todo:", error);
+           toast({
+               title: "Error Updating Todo",
+               description: error instanceof Error ? error.message : "Could not update the todo status.",
+               variant: "destructive",
+           });
+       }
+   };
+
 
    const handleDateClick = (date: Date) => {
      setSelectedDate(date);
@@ -70,7 +107,6 @@ export default function ARCalendar() { // Changed component name
   const handleSaveEvent = (eventData: CalendarEvent) => {
      try {
         if (events.some(e => e.id === eventData.id)) {
-           // Update existing event
            const updated = updateEvent(eventData);
            if (updated) {
               setEvents(prevEvents => prevEvents.map(e => e.id === updated.id ? updated : e));
@@ -79,7 +115,6 @@ export default function ARCalendar() { // Changed component name
                throw new Error("Failed to update event.");
            }
         } else {
-          // Add new event
           const newEvent = addEvent(eventData);
           setEvents(prevEvents => [...prevEvents, newEvent]);
           toast({ title: "Event Created", description: `"${newEvent.title}" has been added.` });
@@ -96,6 +131,36 @@ export default function ARCalendar() { // Changed component name
        setSelectedEvent(null);
      }
    };
+
+    const handleSaveTodo = (todoData: TodoItem) => {
+       try {
+          if (todos.some(t => t.id === todoData.id)) {
+             // Update existing todo
+             const updated = updateTodo(todoData);
+             if (updated) {
+                setTodos(prevTodos => prevTodos.map(t => t.id === updated.id ? updated : t));
+                toast({ title: "Todo Updated", description: `"${todoData.title}" has been updated.` });
+             } else {
+                 throw new Error("Failed to update todo.");
+             }
+          } else {
+            // Add new todo - assuming date is already set
+            const newTodo = addTodo({ title: todoData.title, date: todoData.date, description: todoData.description });
+            setTodos(prevTodos => [...prevTodos, newTodo]);
+            toast({ title: "Todo Created", description: `"${newTodo.title}" has been added.` });
+          }
+       } catch (error) {
+          console.error("Failed to save todo:", error);
+          toast({
+              title: "Error Saving Todo",
+              description: error instanceof Error ? error.message : "Could not save the todo.",
+              variant: "destructive",
+          });
+       } finally {
+         setIsTodoFormOpen(false);
+         setSelectedTodo(null);
+       }
+     };
 
    const handleDeleteEvent = (eventId: string) => {
        try {
@@ -120,6 +185,29 @@ export default function ARCalendar() { // Changed component name
        }
    };
 
+    const handleDeleteTodo = (todoId: string) => {
+       try {
+           const success = deleteTodo(todoId);
+            if (success) {
+               const deletedTodo = todos.find(t => t.id === todoId);
+               setTodos(prevTodos => prevTodos.filter(todo => todo.id !== todoId));
+               toast({ title: "Todo Deleted", description: `"${deletedTodo?.title}" has been deleted.` });
+           } else {
+                throw new Error("Todo not found for deletion.")
+           }
+       } catch (error) {
+           console.error("Failed to delete todo:", error);
+           toast({
+               title: "Error Deleting Todo",
+               description: error instanceof Error ? error.message : "Could not delete the todo.",
+               variant: "destructive",
+           });
+       } finally {
+         setIsTodoFormOpen(false);
+         setSelectedTodo(null);
+       }
+   };
+
 
   // Memoize filtered events for performance
   const filteredEvents = useMemo(() => {
@@ -128,7 +216,6 @@ export default function ARCalendar() { // Changed component name
       case "day":
         return getEventsForDate(format(selectedDate, "yyyy-MM-dd"));
       case "week":
-         // Pass the selectedDate which falls within the target week
         return getEventsForWeek(selectedDate);
       case "month":
         return getEventsForMonth(selectedDate.getFullYear(), selectedDate.getMonth());
@@ -137,11 +224,22 @@ export default function ARCalendar() { // Changed component name
     }
   }, [currentView, selectedDate, events, isLoading]);
 
+  // Memoize filtered todos for performance (only day view needs specific filtering)
+  const filteredTodos = useMemo(() => {
+      if (isLoading) return [];
+      if (currentView === "day") {
+          return getTodosForDate(format(selectedDate, "yyyy-MM-dd"));
+      }
+      // For month/week view, we don't need date-specific todos in this component's context yet.
+      // If needed later, add logic here similar to filteredEvents.
+      return []; // Return empty for month/week, as DayView handles its own date filtering
+  }, [currentView, selectedDate, todos, isLoading]);
+
 
   return (
     <div className="flex h-screen flex-col p-4 md:p-6 bg-secondary/30">
       <header className="flex items-center justify-between pb-4 mb-4 border-b">
-        <h1 className="text-2xl font-bold text-primary">AR Calendar</h1> {/* Changed header title */}
+        <h1 className="text-2xl font-bold text-primary">AR Calendar</h1>
         <div className="flex items-center gap-2">
           <Popover>
             <PopoverTrigger asChild>
@@ -162,10 +260,9 @@ export default function ARCalendar() { // Changed component name
           <Button onClick={handleAddEventClick} aria-label="Add new event">
             <PlusCircle className="mr-2 h-4 w-4" /> Add Event
           </Button>
-          {/* Placeholder for Settings */}
-          {/* <Button variant="ghost" size="icon" aria-label="Settings">
-             <Settings className="h-5 w-5" />
-          </Button> */}
+           <Button onClick={handleAddTodoClick} variant="secondary" aria-label="Add new todo item">
+             <ListTodo className="mr-2 h-4 w-4" /> Add Todo
+           </Button>
         </div>
       </header>
 
@@ -176,7 +273,6 @@ export default function ARCalendar() { // Changed component name
           <TabsTrigger value="day">Day</TabsTrigger>
         </TabsList>
 
-        {/* Ensure TabsContent fills remaining space */}
          <div className="flex-grow overflow-hidden">
             <TabsContent value="month" className="h-full m-0">
               {isLoading ? (
@@ -184,10 +280,12 @@ export default function ARCalendar() { // Changed component name
               ) : (
                 <CalendarMonthView
                     date={selectedDate}
-                    events={filteredEvents}
+                    events={filteredEvents} // Pass all events for month view logic
+                    todos={todos} // Pass all todos for month view logic (e.g., count indicators)
                     onDateChange={setSelectedDate}
                     onEventClick={handleEventClick}
                     onDateClick={handleDateClick}
+                    onTodoClick={handleTodoClick} // Pass handler
                 />
               )}
             </TabsContent>
@@ -197,9 +295,11 @@ export default function ARCalendar() { // Changed component name
                ) : (
                  <CalendarWeekView
                    date={selectedDate}
-                   events={filteredEvents}
+                   events={filteredEvents} // Pass week-filtered events
+                   todos={todos} // Pass all todos for week view logic
                    onEventClick={handleEventClick}
-                    onDateClick={handleDateClick} // Pass handler
+                   onDateClick={handleDateClick}
+                   onTodoClick={handleTodoClick} // Pass handler
                  />
                )}
              </TabsContent>
@@ -209,8 +309,11 @@ export default function ARCalendar() { // Changed component name
                ) : (
                  <CalendarDayView
                    date={selectedDate}
-                   events={filteredEvents}
+                   events={filteredEvents} // Pass day-filtered events
+                   todos={filteredTodos} // Pass day-filtered todos
                    onEventClick={handleEventClick}
+                   onTodoClick={handleTodoClick} // Pass handler
+                   onTodoToggle={handleTodoToggle} // Pass toggle handler
                  />
                )}
              </TabsContent>
@@ -226,6 +329,14 @@ export default function ARCalendar() { // Changed component name
         onSave={handleSaveEvent}
         onDelete={handleDeleteEvent}
       />
+       <TodoForm // Add TodoForm dialog
+         isOpen={isTodoFormOpen}
+         onOpenChange={setIsTodoFormOpen}
+         todo={selectedTodo}
+         selectedDate={selectedDate}
+         onSave={handleSaveTodo}
+         onDelete={handleDeleteTodo}
+       />
        <Toaster />
     </div>
   );

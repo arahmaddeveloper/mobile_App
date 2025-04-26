@@ -1,3 +1,4 @@
+
 "use client";
 
 import type { FC } from "react";
@@ -15,53 +16,52 @@ import {
   subMonths,
 } from "date-fns";
 
-import type { CalendarEvent } from "@/lib/types";
+import type { CalendarEvent, TodoItem } from "@/lib/types"; // Added TodoItem
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckSquare } from "lucide-react"; // Added CheckSquare
 
 interface CalendarMonthViewProps {
   date: Date;
   events: CalendarEvent[];
+  todos: TodoItem[]; // Added todos prop
   onDateChange: (newDate: Date) => void;
   onEventClick: (event: CalendarEvent) => void;
-  onDateClick: (date: Date) => void; // For navigating to day/week view
+  onDateClick: (date: Date) => void;
+  onTodoClick: (todo: TodoItem) => void; // Added handler
 }
 
 const CalendarMonthView: FC<CalendarMonthViewProps> = ({
   date,
   events,
+  todos, // Destructure todos
   onDateChange,
   onEventClick,
   onDateClick,
+  onTodoClick, // Destructure handler
 }) => {
   const monthStart = startOfMonth(date);
   const monthEnd = endOfMonth(date);
-  const startDate = startOfWeek(monthStart, { weekStartsOn: 0 }); // Start week on Sunday
+  const startDate = startOfWeek(monthStart, { weekStartsOn: 0 });
   const endDate = endOfWeek(monthEnd, { weekStartsOn: 0 });
 
   const days = eachDayOfInterval({ start: startDate, end: endDate });
-  const weeks: Date[][] = [];
-  let currentWeek: Date[] = [];
-
-  days.forEach((day, index) => {
-    currentWeek.push(day);
-    if ((index + 1) % 7 === 0) {
-      weeks.push(currentWeek);
-      currentWeek = [];
-    }
-  });
 
   const getEventsForDay = (day: Date): CalendarEvent[] => {
+    const dayFormatted = format(day, 'yyyy-MM-dd');
     return events
-      .filter((event) => isSameDay(new Date(event.date + 'T00:00:00'), day))
+      .filter((event) => event.date === dayFormatted)
       .sort((a, b) => {
-         // Sort all-day events first, then by start time
          if (a.allDay && !b.allDay) return -1;
          if (!a.allDay && b.allDay) return 1;
          return (a.startTime || '').localeCompare(b.startTime || '');
       });
+  };
+
+  const getTodosForDay = (day: Date): TodoItem[] => {
+    const dayFormatted = format(day, 'yyyy-MM-dd');
+    return todos.filter((todo) => todo.date === dayFormatted);
   };
 
   const handlePrevMonth = () => {
@@ -93,24 +93,26 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
             </div>
           ))}
         </div>
-        <div className="grid grid-rows-auto grid-cols-7 h-[calc(100%-2.5rem)]"> {/* Adjust height calculation */}
+        <div className="grid grid-rows-auto grid-cols-7 h-[calc(100%-2.5rem)]">
           {days.map((day) => {
             const dayEvents = getEventsForDay(day);
+            const dayTodos = getTodosForDay(day); // Get todos for the day
             const isCurrentMonth = isSameMonth(day, date);
             const isCurrentDay = isToday(day);
+            const totalItems = dayEvents.length + dayTodos.length; // Combined count
 
             return (
               <div
                 key={day.toString()}
                 className={cn(
-                  "border-r border-b p-1.5 flex flex-col relative min-h-[6rem] cursor-pointer hover:bg-accent/5", // Ensure min height
+                  "border-r border-b p-1.5 flex flex-col relative min-h-[6rem] cursor-pointer hover:bg-accent/5 transition-colors",
                   !isCurrentMonth && "bg-muted/30 text-muted-foreground",
-                  "last:border-r-0" // Remove right border for last cell in row
+                  "last:border-r-0"
                 )}
                  onClick={() => onDateClick(day)}
                  role="button"
                  tabIndex={0}
-                 aria-label={`Date ${format(day, "MMMM d")}, ${dayEvents.length} events`}
+                 aria-label={`Date ${format(day, "MMMM d")}, ${dayEvents.length} events, ${dayTodos.length} todos`}
               >
                 <span
                   className={cn(
@@ -120,8 +122,9 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
                 >
                   {format(day, "d")}
                 </span>
-                <div className="flex-grow overflow-y-auto space-y-0.5 max-h-[calc(100%-1.25rem)]"> {/* Limit event height */}
-                  {dayEvents.slice(0, 3).map((event) => ( // Limit visible events
+                <div className="flex-grow overflow-y-auto space-y-0.5 max-h-[calc(100%-1.25rem)]">
+                  {/* Display Events */}
+                  {dayEvents.slice(0, 2).map((event) => ( // Show max 2 events initially
                     <div
                       key={event.id}
                       className={cn(
@@ -130,7 +133,7 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
                          "hover:opacity-80"
                       )}
                       onClick={(e) => {
-                        e.stopPropagation(); // Prevent triggering date click
+                        e.stopPropagation();
                         onEventClick(event);
                       }}
                       title={event.title}
@@ -142,9 +145,35 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
                       {event.title}
                     </div>
                   ))}
-                  {dayEvents.length > 3 && (
+                   {/* Display Todos - Show max 1 todo initially if space allows */}
+                   {dayEvents.length < 2 && dayTodos.slice(0, 1).map((todo) => (
+                      <div
+                        key={todo.id}
+                        className={cn(
+                          "text-[10px] leading-tight p-0.5 rounded truncate cursor-pointer flex items-center",
+                          "bg-secondary/50 text-secondary-foreground", // Different style for todos
+                          "hover:opacity-80"
+                        )}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onTodoClick(todo); // Use onTodoClick
+                        }}
+                        title={todo.title}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Todo: ${todo.title}`}
+                      >
+                         <CheckSquare className={cn("h-2.5 w-2.5 mr-1 flex-shrink-0", todo.completed ? "text-green-600" : "text-muted-foreground")} />
+                        <span className={cn(todo.completed && "line-through text-muted-foreground")}>
+                          {todo.title}
+                        </span>
+                      </div>
+                   ))}
+
+                  {/* Show "+X more" indicator */}
+                  {totalItems > (dayEvents.length < 2 ? 3 : 2) && ( // Adjust limit based on displayed items
                      <div className="text-[10px] text-muted-foreground mt-0.5">
-                         +{dayEvents.length - 3} more
+                         +{totalItems - (dayEvents.length < 2 ? (dayEvents.length + dayTodos.slice(0,1).length) : dayEvents.length) } more
                      </div>
                    )}
                 </div>

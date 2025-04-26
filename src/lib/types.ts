@@ -6,6 +6,7 @@ export interface CalendarEvent {
   startTime?: string; // Store time as HH:mm
   endTime?: string; // Store time as HH:mm
   allDay: boolean;
+  reminderMinutes?: number; // Minutes before the event to send a notification (optional)
 }
 
 export interface TodoItem {

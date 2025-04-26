@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { format } from "date-fns";
-import { CalendarIcon, Clock, Trash2 } from "lucide-react";
+import { CalendarIcon, Clock, Trash2, BellRing } from "lucide-react";
 
 import type { CalendarEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"; // Import Select components
 import {
   Dialog,
   DialogContent,
@@ -39,6 +46,15 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 
 const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+const reminderOptions = [
+  { value: "0", label: "None" },
+  { value: "5", label: "5 minutes before" },
+  { value: "15", label: "15 minutes before" },
+  { value: "30", label: "30 minutes before" },
+  { value: "60", label: "1 hour before" },
+  { value: "1440", label: "1 day before" }, // 60 * 24
+];
+
 const eventFormSchema = z.object({
   title: z.string().min(1, { message: "Title is required" }),
   description: z.string().optional(),
@@ -46,6 +62,7 @@ const eventFormSchema = z.object({
   startTime: z.string().regex(timeRegex, { message: "Invalid time format (HH:mm)" }).optional().or(z.literal("")),
   endTime: z.string().regex(timeRegex, { message: "Invalid time format (HH:mm)" }).optional().or(z.literal("")),
   allDay: z.boolean().default(false),
+  reminderMinutes: z.string().optional(), // Store as string initially from select
 }).refine(data => {
   // If not allDay, startTime must be present
   if (!data.allDay && !data.startTime) return false;
@@ -88,34 +105,39 @@ export const EventForm: FC<EventFormProps> = ({
       startTime: "",
       endTime: "",
       allDay: false,
+      reminderMinutes: "0", // Default to "None"
     },
   });
 
-  const { watch, setValue } = form;
+  const { watch, setValue, reset } = form; // Added reset
   const isAllDay = watch("allDay");
 
   useEffect(() => {
-    if (event) {
-      form.reset({
-        title: event.title,
-        description: event.description || "",
-        date: new Date(event.date + 'T00:00:00'), // Ensure date is parsed correctly
-        startTime: event.startTime || "",
-        endTime: event.endTime || "",
-        allDay: event.allDay,
-      });
-    } else {
-      // Reset to default values for creation, using selectedDate
-      form.reset({
-        title: "",
-        description: "",
-        date: selectedDate,
-        startTime: "",
-        endTime: "",
-        allDay: false,
-      });
+    if (isOpen) { // Reset form when dialog opens
+      if (event) {
+        reset({
+          title: event.title,
+          description: event.description || "",
+          date: new Date(event.date + 'T00:00:00'), // Ensure date is parsed correctly
+          startTime: event.startTime || "",
+          endTime: event.endTime || "",
+          allDay: event.allDay,
+          reminderMinutes: event.reminderMinutes !== undefined ? String(event.reminderMinutes) : "0", // Convert number back to string for select
+        });
+      } else {
+        // Reset to default values for creation, using selectedDate
+        reset({
+          title: "",
+          description: "",
+          date: selectedDate,
+          startTime: "",
+          endTime: "",
+          allDay: false,
+          reminderMinutes: "0",
+        });
+      }
     }
-  }, [event, selectedDate, form.reset]); // Use form.reset here
+  }, [event, selectedDate, reset, isOpen]); // Use reset here, depend on isOpen
 
    useEffect(() => {
      // Clear times if allDay is checked
@@ -126,6 +148,9 @@ export const EventForm: FC<EventFormProps> = ({
    }, [isAllDay, setValue]);
 
   const onSubmit = (values: EventFormValues) => {
+    const reminderValue = parseInt(values.reminderMinutes || "0", 10);
+    const reminderMinutes = reminderValue > 0 ? reminderValue : undefined; // Set to undefined if "None" (0)
+
     const eventData: Omit<CalendarEvent, 'id'> = {
       title: values.title,
       description: values.description,
@@ -133,6 +158,7 @@ export const EventForm: FC<EventFormProps> = ({
       startTime: values.allDay ? undefined : values.startTime,
       endTime: values.allDay ? undefined : values.endTime,
       allDay: values.allDay,
+      reminderMinutes: reminderMinutes,
     };
 
     const finalEvent: CalendarEvent = {
@@ -140,12 +166,34 @@ export const EventForm: FC<EventFormProps> = ({
       id: isEditing ? event.id : crypto.randomUUID(), // Use existing ID if editing
     };
 
+    // TODO: Implement notification scheduling logic here
+    // This would typically involve:
+    // 1. Requesting Notification permissions if not already granted.
+    // 2. Calculating the notification trigger time (event time - reminderMinutes).
+    // 3. Using the Notifications API (potentially with a Service Worker for persistence)
+    //    to schedule the notification.
+    // Example placeholder:
+    // if (finalEvent.reminderMinutes && finalEvent.startTime && 'Notification' in window && Notification.permission === 'granted') {
+    //   console.log(`Scheduling notification for "${finalEvent.title}" ${finalEvent.reminderMinutes} minutes before ${finalEvent.startTime}`);
+    //   // scheduleNotification(finalEvent); // Call actual scheduling function
+    // } else if (finalEvent.reminderMinutes && 'Notification' in window && Notification.permission !== 'denied') {
+    //    // Request permission
+    //    Notification.requestPermission().then(permission => {
+    //       if (permission === 'granted') {
+    //          // scheduleNotification(finalEvent);
+    //          console.log(`Notification permission granted. Scheduling notification for "${finalEvent.title}"`);
+    //       }
+    //    });
+    // }
+
     onSave(finalEvent);
     onOpenChange(false); // Close dialog after save
   };
 
   const handleDelete = () => {
       if (event && onDelete) {
+          // TODO: Cancel any scheduled notifications for this event
+          // cancelNotification(event.id);
           onDelete(event.id);
           onOpenChange(false); // Close main dialog
           setShowDeleteConfirm(false); // Close confirmation dialog
@@ -220,7 +268,7 @@ export const EventForm: FC<EventFormProps> = ({
                         selected={field.value}
                         onSelect={field.onChange}
                         initialFocus
-                        disabled={(date) => date < new Date(new Date().setDate(new Date().getDate() - 1))} // Example: disable past dates
+                        // disabled={(date) => date < new Date(new Date().setDate(new Date().getDate() - 1))} // Example: disable past dates
                       />
                     </PopoverContent>
                   </Popover>
@@ -286,12 +334,42 @@ export const EventForm: FC<EventFormProps> = ({
               </div>
             )}
 
+            {/* Reminder Select Dropdown (only show if not all-day) */}
+            {!isAllDay && (
+              <FormField
+                control={form.control}
+                name="reminderMinutes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Reminder</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <BellRing className="mr-2 h-4 w-4 text-muted-foreground" />
+                          <SelectValue placeholder="Set a reminder" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {reminderOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
-            <DialogFooter className="sm:justify-between pt-4">
+
+            <DialogFooter className="sm:justify-between pt-4 flex-wrap gap-2"> {/* Added flex-wrap and gap */}
                  {isEditing && onDelete && (
                      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
                          <AlertDialogTrigger asChild>
-                             <Button type="button" variant="destructive" className="mr-auto">
+                             {/* Ensure delete button doesn't cause overflow */}
+                             <Button type="button" variant="destructive" className="flex-shrink-0 mr-auto sm:mr-0 sm:order-1">
                                 <Trash2 className="mr-2 h-4 w-4" /> Delete
                              </Button>
                          </AlertDialogTrigger>
@@ -311,8 +389,8 @@ export const EventForm: FC<EventFormProps> = ({
                          </AlertDialogContent>
                      </AlertDialog>
                  )}
-                 {/* Ensure the save/cancel buttons are pushed to the right */}
-                  <div className="flex gap-2 ml-auto">
+                 {/* Ensure the save/cancel buttons are pushed to the right and wrap nicely */}
+                  <div className="flex gap-2 ml-auto sm:order-2 flex-shrink-0"> {/* Added flex-shrink-0 */}
                      <DialogClose asChild>
                          <Button type="button" variant="outline">
                              Cancel

@@ -1,8 +1,8 @@
 
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { format, startOfDay } from "date-fns";
+import { useState, useEffect, useMemo, useCallback } from "react"; // Added useCallback
+import { format, startOfDay, subMinutes, parse } from "date-fns"; // Added subMinutes, parse
 import { Calendar as CalendarIcon, PlusCircle, ListTodo } from "lucide-react";
 
 import type { CalendarEvent, TodoItem } from "@/lib/types";
@@ -23,6 +23,95 @@ import { useToast } from "@/hooks/use-toast";
 
 type View = "month" | "week" | "day";
 
+// Notification related state and functions
+// Note: Actual notification scheduling requires a Service Worker for reliability,
+// especially for notifications when the app/tab isn't active.
+// This basic implementation uses the browser's Notification API directly.
+
+let notificationPermission: NotificationPermission | null = null;
+if (typeof window !== 'undefined' && 'Notification' in window) {
+    notificationPermission = Notification.permission;
+}
+
+const requestNotificationPermission = async (): Promise<boolean> => {
+    if (!('Notification' in window)) {
+        console.warn("Notifications not supported by this browser.");
+        return false;
+    }
+    if (notificationPermission === 'granted') {
+        return true;
+    }
+    if (notificationPermission !== 'denied') {
+        try {
+            const permission = await Notification.requestPermission();
+            notificationPermission = permission; // Update state
+            return permission === 'granted';
+        } catch (error) {
+            console.error("Error requesting notification permission:", error);
+            return false;
+        }
+    }
+    return false; // Permission was denied previously
+};
+
+// Basic scheduling (in-memory, will be lost on refresh/close without SW)
+const scheduledNotifications = new Map<string, number>(); // eventId -> timeoutId
+
+const scheduleNotification = (event: CalendarEvent) => {
+    if (!event.reminderMinutes || !event.startTime || event.allDay) return;
+    if (notificationPermission !== 'granted') {
+        console.warn("Notification permission not granted. Cannot schedule.");
+        return;
+    }
+
+    try {
+         // Combine date and time, parse correctly
+        const eventDateTime = parse(`${event.date} ${event.startTime}`, 'yyyy-MM-dd HH:mm', new Date());
+
+        if (isNaN(eventDateTime.getTime())) {
+           console.error("Invalid date/time for notification scheduling:", event.date, event.startTime);
+           return;
+        }
+
+        const notificationTime = subMinutes(eventDateTime, event.reminderMinutes);
+        const now = new Date();
+
+        if (notificationTime <= now) {
+            console.log("Notification time is in the past for event:", event.title);
+            return; // Don't schedule past notifications
+        }
+
+        const delay = notificationTime.getTime() - now.getTime();
+
+        // Clear any existing notification for this event
+        cancelNotification(event.id);
+
+        const timeoutId = window.setTimeout(() => {
+            new Notification(`Upcoming: ${event.title}`, {
+                body: `Starts at ${event.startTime}${event.description ? `\n${event.description}` : ''}`,
+                tag: event.id, // Use event ID as tag to prevent duplicates if needed
+            });
+            scheduledNotifications.delete(event.id); // Clean up after showing
+        }, delay);
+
+        scheduledNotifications.set(event.id, timeoutId);
+        console.log(`Notification scheduled for "${event.title}" at ${notificationTime.toISOString()}`);
+
+    } catch (error) {
+        console.error("Error scheduling notification:", error);
+    }
+};
+
+const cancelNotification = (eventId: string) => {
+    const timeoutId = scheduledNotifications.get(eventId);
+    if (timeoutId) {
+        clearTimeout(timeoutId);
+        scheduledNotifications.delete(eventId);
+        console.log(`Notification cancelled for event ID: ${eventId}`);
+    }
+};
+
+
 export default function ChronoZenCalendar() {
   const [selectedDate, setSelectedDate] = useState<Date>(startOfDay(new Date()));
   const [currentView, setCurrentView] = useState<View>("month");
@@ -35,27 +124,29 @@ export default function ChronoZenCalendar() {
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
-  // Load events and todos from local storage on mount
+  // --- Load Data ---
   useEffect(() => {
     setIsLoading(true);
     try {
-       // Ensure local storage access only happens client-side
        if (typeof window !== 'undefined') {
            setEvents(getEvents());
            setTodos(getTodos());
+           // Attempt to schedule notifications for existing events on load
+           getEvents().forEach(event => scheduleNotification(event));
        }
     } catch (error) {
         console.error("Failed to load data:", error);
         toast({
             title: "Error Loading Data",
-            description: "Could not load events or todos from local storage.",
+            description: "Could not load events or todos.",
             variant: "destructive",
         });
     } finally {
         setIsLoading(false);
     }
-  }, [toast]); // Removed window dependency as it's checked inside
+  }, [toast]);
 
+  // --- Event & Todo Handlers ---
   const handleDateChange = (date: Date | undefined) => {
     if (date) {
       setSelectedDate(startOfDay(date));
@@ -82,7 +173,7 @@ export default function ChronoZenCalendar() {
      setIsTodoFormOpen(true);
    };
 
-   const handleTodoToggle = (todoId: string) => {
+   const handleTodoToggle = useCallback((todoId: string) => { // Wrap in useCallback
        try {
            const updatedTodo = toggleTodoCompletion(todoId);
             if (updatedTodo) {
@@ -99,48 +190,71 @@ export default function ChronoZenCalendar() {
                variant: "destructive",
            });
        }
-   };
+   }, [toast]); // Add dependencies
 
 
-   const handleDateClick = (date: Date) => {
+   const handleDateClick = useCallback((date: Date) => { // Wrap in useCallback
      setSelectedDate(startOfDay(date)); // Ensure start of day
      setCurrentView("day");
-   };
+   }, []); // Empty dependency array
 
 
-  const handleSaveEvent = (eventData: CalendarEvent) => {
-     try {
-        if (events.some(e => e.id === eventData.id)) {
-           const updated = updateEvent(eventData);
-           if (updated) {
-              setEvents(prevEvents => prevEvents.map(e => e.id === updated.id ? updated : e));
-              toast({ title: "Event Updated", description: `"${eventData.title}" has been updated.` });
+   const handleSaveEvent = useCallback(async (eventData: CalendarEvent) => { // Make async
+       try {
+           let savedEvent: CalendarEvent | null = null;
+           const isNewEvent = !events.some(e => e.id === eventData.id);
+
+           if (isNewEvent) {
+               const newEvent = addEvent({
+                   ...eventData,
+                   date: format(eventData.date ? new Date(eventData.date + 'T00:00:00') : selectedDate, "yyyy-MM-dd")
+               });
+               setEvents(prevEvents => [...prevEvents, newEvent]);
+               toast({ title: "Event Created", description: `"${newEvent.title}" has been added.` });
+               savedEvent = newEvent;
            } else {
-               throw new Error("Failed to update event.");
+               const updated = updateEvent(eventData);
+               if (updated) {
+                   setEvents(prevEvents => prevEvents.map(e => e.id === updated.id ? updated : e));
+                   toast({ title: "Event Updated", description: `"${eventData.title}" has been updated.` });
+                   savedEvent = updated;
+               } else {
+                   throw new Error("Failed to update event.");
+               }
            }
-        } else {
-          // Ensure date is passed correctly for new event
-          const newEvent = addEvent({
-            ...eventData,
-            date: format(eventData.date ? new Date(eventData.date + 'T00:00:00') : selectedDate, "yyyy-MM-dd") // Use provided date or fallback
-          });
-          setEvents(prevEvents => [...prevEvents, newEvent]);
-          toast({ title: "Event Created", description: `"${newEvent.title}" has been added.` });
-        }
-     } catch (error) {
-        console.error("Failed to save event:", error);
-        toast({
-            title: "Error Saving Event",
-            description: error instanceof Error ? error.message : "Could not save the event.",
-            variant: "destructive",
-        });
-     } finally {
-       setIsEventFormOpen(false);
-       setSelectedEvent(null);
-     }
-   };
 
-    const handleSaveTodo = (todoData: TodoItem) => {
+           // Handle notification scheduling/cancelling
+           if (savedEvent) {
+               if (savedEvent.reminderMinutes && savedEvent.startTime && !savedEvent.allDay) {
+                   const permissionGranted = await requestNotificationPermission();
+                   if (permissionGranted) {
+                       scheduleNotification(savedEvent);
+                   } else if (notificationPermission !== 'denied') {
+                       // Optionally inform user permission is needed
+                       toast({ title: "Notification Permission", description: "Please allow notifications to get reminders.", variant: "default" });
+                   } else {
+                       toast({ title: "Notifications Blocked", description: "Please enable notifications in browser settings.", variant: "destructive" });
+                   }
+               } else {
+                   // If reminder was removed or event became all-day, cancel existing notification
+                   cancelNotification(savedEvent.id);
+               }
+           }
+
+       } catch (error) {
+           console.error("Failed to save event:", error);
+           toast({
+               title: "Error Saving Event",
+               description: error instanceof Error ? error.message : "Could not save the event.",
+               variant: "destructive",
+           });
+       } finally {
+           setIsEventFormOpen(false);
+           setSelectedEvent(null);
+       }
+   }, [events, selectedDate, toast]); // Add dependencies
+
+    const handleSaveTodo = useCallback((todoData: TodoItem) => { // Wrap in useCallback
        try {
           if (todos.some(t => t.id === todoData.id)) {
              const updated = updateTodo(todoData);
@@ -153,7 +267,6 @@ export default function ChronoZenCalendar() {
           } else {
             const newTodo = addTodo({
                 title: todoData.title,
-                // Ensure date is handled correctly, use selectedDate if todoData.date isn't set yet
                 date: format(todoData.date ? new Date(todoData.date + 'T00:00:00') : selectedDate, "yyyy-MM-dd"),
                 description: todoData.description
             });
@@ -171,15 +284,16 @@ export default function ChronoZenCalendar() {
          setIsTodoFormOpen(false);
          setSelectedTodo(null);
        }
-     };
+     }, [todos, selectedDate, toast]); // Add dependencies
 
-   const handleDeleteEvent = (eventId: string) => {
+   const handleDeleteEvent = useCallback((eventId: string) => { // Wrap in useCallback
        try {
+           const deletedEvent = events.find(e => e.id === eventId); // Find before deleting
            const success = deleteEvent(eventId);
-            if (success) {
-               const deletedEvent = events.find(e => e.id === eventId);
+            if (success && deletedEvent) {
                setEvents(prevEvents => prevEvents.filter(event => event.id !== eventId));
-               toast({ title: "Event Deleted", description: `"${deletedEvent?.title}" has been deleted.` });
+               cancelNotification(eventId); // Cancel notification on delete
+               toast({ title: "Event Deleted", description: `"${deletedEvent.title}" has been deleted.` });
            } else {
                 throw new Error("Event not found for deletion.")
            }
@@ -194,15 +308,15 @@ export default function ChronoZenCalendar() {
          setIsEventFormOpen(false);
          setSelectedEvent(null);
        }
-   };
+   }, [events, toast]); // Add dependencies
 
-    const handleDeleteTodo = (todoId: string) => {
+    const handleDeleteTodo = useCallback((todoId: string) => { // Wrap in useCallback
        try {
-           const success = deleteTodo(todoId);
-            if (success) {
-               const deletedTodo = todos.find(t => t.id === todoId);
+            const deletedTodo = todos.find(t => t.id === todoId); // Find before deleting
+            const success = deleteTodo(todoId);
+            if (success && deletedTodo) {
                setTodos(prevTodos => prevTodos.filter(todo => todo.id !== todoId));
-               toast({ title: "Todo Deleted", description: `"${deletedTodo?.title}" has been deleted.` });
+               toast({ title: "Todo Deleted", description: `"${deletedTodo.title}" has been deleted.` });
            } else {
                 throw new Error("Todo not found for deletion.")
            }
@@ -217,12 +331,13 @@ export default function ChronoZenCalendar() {
          setIsTodoFormOpen(false);
          setSelectedTodo(null);
        }
-   };
+   }, [todos, toast]); // Add dependencies
 
 
-  // Memoize filtered events for performance
+  // --- Memoized Data for Views ---
   const filteredEvents = useMemo(() => {
     if (isLoading || typeof window === 'undefined') return [];
+    const currentEvents = getEvents(); // Get fresh data for filtering
     switch (currentView) {
       case "day":
         return getEventsForDate(format(selectedDate, "yyyy-MM-dd"));
@@ -231,30 +346,32 @@ export default function ChronoZenCalendar() {
       case "month":
         return getEventsForMonth(selectedDate.getFullYear(), selectedDate.getMonth());
       default:
-        return getEvents(); // Use getter to ensure consistency
+        return currentEvents;
     }
-  }, [currentView, selectedDate, events, isLoading]); // Rerun if events state changes
+  }, [currentView, selectedDate, events, isLoading]); // Include events in dependency
 
-  // Memoize filtered todos for performance (only day view needs specific filtering)
   const filteredTodos = useMemo(() => {
       if (isLoading || typeof window === 'undefined') return [];
+       const currentTodos = getTodos(); // Get fresh data
       if (currentView === "day") {
           return getTodosForDate(format(selectedDate, "yyyy-MM-dd"));
       }
-      // For month/week view, we pass all todos so the views can filter/count as needed.
-      return getTodos(); // Use getter to ensure consistency
-  }, [currentView, selectedDate, todos, isLoading]); // Rerun if todos state changes
+      return currentTodos;
+  }, [currentView, selectedDate, todos, isLoading]); // Include todos in dependency
 
 
+  // --- Render ---
   return (
-    <div className="flex h-screen flex-col p-4 md:p-6 bg-secondary/30">
-      <header className="flex flex-col sm:flex-row items-center justify-between pb-4 mb-4 border-b gap-4 sm:gap-0">
-        <h1 className="text-2xl font-bold text-primary">ChronoZen Calendar</h1>
+    <div className="flex h-screen flex-col p-2 sm:p-4 md:p-6 bg-secondary/30">
+      {/* Header */}
+      <header className="flex flex-col sm:flex-row items-center justify-between pb-3 sm:pb-4 mb-3 sm:mb-4 border-b gap-2 sm:gap-4">
+        <h1 className="text-xl sm:text-2xl font-bold text-primary whitespace-nowrap">AR Calendar</h1>
         <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
+          {/* Date Picker Popover */}
           <Popover>
             <PopoverTrigger asChild>
-              <Button variant="outline" className="w-full sm:w-[280px] justify-start text-left font-normal">
-                <CalendarIcon className="mr-2 h-4 w-4" />
+              <Button variant="outline" className="w-full sm:w-auto justify-start text-left font-normal text-xs sm:text-sm px-2 sm:px-3">
+                <CalendarIcon className="mr-1 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" />
                 {format(selectedDate, "PPP")}
               </Button>
             </PopoverTrigger>
@@ -267,87 +384,90 @@ export default function ChronoZenCalendar() {
               />
             </PopoverContent>
           </Popover>
+          {/* Action Buttons */}
            <div className="flex gap-2 w-full sm:w-auto">
-              <Button onClick={handleAddEventClick} aria-label="Add new event" className="flex-1 sm:flex-none">
-                <PlusCircle className="mr-2 h-4 w-4" /> Add Event
+              <Button onClick={handleAddEventClick} aria-label="Add new event" size="sm" className="flex-1 sm:flex-none text-xs sm:text-sm">
+                <PlusCircle className="mr-1 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" /> Add Event
               </Button>
-               <Button onClick={handleAddTodoClick} variant="secondary" aria-label="Add new todo item" className="flex-1 sm:flex-none">
-                 <ListTodo className="mr-2 h-4 w-4" /> Add Todo
+               <Button onClick={handleAddTodoClick} variant="secondary" size="sm" aria-label="Add new todo item" className="flex-1 sm:flex-none text-xs sm:text-sm">
+                 <ListTodo className="mr-1 sm:mr-2 h-3.5 w-3.5 sm:h-4 sm:w-4" /> Add Todo
                </Button>
            </div>
         </div>
       </header>
 
-      <Tabs value={currentView} onValueChange={(value) => setCurrentView(value as View)} className="flex flex-col flex-grow">
-        <TabsList className="mb-4 grid w-full grid-cols-3">
+      {/* Main Content Area with Tabs */}
+      <Tabs value={currentView} onValueChange={(value) => setCurrentView(value as View)} className="flex flex-col flex-grow min-h-0"> {/* Added min-h-0 */}
+        {/* Tab Triggers */}
+        <TabsList className="mb-2 sm:mb-4 grid w-full grid-cols-3 h-9 sm:h-10 text-xs sm:text-sm">
           <TabsTrigger value="month">Month</TabsTrigger>
           <TabsTrigger value="week">Week</TabsTrigger>
           <TabsTrigger value="day">Day</TabsTrigger>
         </TabsList>
 
-         <div className="flex-grow overflow-hidden">
-            <TabsContent value="month" className="h-full m-0">
-              {isLoading ? (
-                  <div className="flex items-center justify-center h-full">Loading Month...</div>
-              ) : (
-                <CalendarMonthView
+         {/* Tab Content Area - Takes remaining space and allows internal scrolling */}
+         <div className="flex-grow overflow-hidden relative"> {/* Ensure parent takes space and hides overflow */}
+             <TabsContent value="month" className="h-full m-0 absolute inset-0 overflow-auto"> {/* Use absolute positioning and overflow-auto */}
+               {isLoading ? (
+                   <div className="flex items-center justify-center h-full text-muted-foreground">Loading Month...</div>
+               ) : (
+                 <CalendarMonthView
+                     date={selectedDate}
+                     events={filteredEvents}
+                     todos={filteredTodos}
+                     onDateChange={setSelectedDate}
+                     onEventClick={handleEventClick}
+                     onDateClick={handleDateClick}
+                     onTodoClick={handleTodoClick}
+                 />
+               )}
+             </TabsContent>
+              <TabsContent value="week" className="h-full m-0 absolute inset-0 overflow-auto">
+                {isLoading ? (
+                  <div className="flex items-center justify-center h-full text-muted-foreground">Loading Week...</div>
+                ) : (
+                  <CalendarWeekView
                     date={selectedDate}
-                    events={filteredEvents} // Use memoized events
-                    todos={filteredTodos} // Use memoized todos
-                    onDateChange={setSelectedDate}
+                    events={filteredEvents}
+                    todos={filteredTodos}
                     onEventClick={handleEventClick}
-                    onDateClick={handleDateClick} // Pass handler
+                    onDateClick={handleDateClick}
                     onTodoClick={handleTodoClick}
-                />
-              )}
-            </TabsContent>
-             <TabsContent value="week" className="h-full m-0">
-               {isLoading ? (
-                 <div className="flex items-center justify-center h-full">Loading Week...</div>
-               ) : (
-                 <CalendarWeekView
-                   date={selectedDate}
-                   events={filteredEvents} // Use memoized events
-                   todos={filteredTodos} // Use memoized todos
-                   onEventClick={handleEventClick}
-                   onDateClick={handleDateClick} // Pass handler
-                   onTodoClick={handleTodoClick}
-                 />
-               )}
-             </TabsContent>
-             <TabsContent value="day" className="h-full m-0">
-               {isLoading ? (
-                 <div className="flex items-center justify-center h-full">Loading Day...</div>
-               ) : (
-                 <CalendarDayView
-                   date={selectedDate}
-                   events={filteredEvents} // Use memoized events (already filtered for day)
-                   todos={filteredTodos} // Use memoized todos (already filtered for day)
-                   onEventClick={handleEventClick}
-                   onTodoClick={handleTodoClick}
-                   onTodoToggle={handleTodoToggle}
-                 />
-               )}
-             </TabsContent>
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="day" className="h-full m-0 absolute inset-0 overflow-auto">
+                {isLoading ? (
+                  <div className="flex items-center justify-center h-full text-muted-foreground">Loading Day...</div>
+                ) : (
+                  <CalendarDayView
+                    date={selectedDate}
+                    events={filteredEvents}
+                    todos={filteredTodos}
+                    onEventClick={handleEventClick}
+                    onTodoClick={handleTodoClick}
+                    onTodoToggle={handleTodoToggle}
+                  />
+                )}
+              </TabsContent>
          </div>
 
       </Tabs>
 
-      {/* Event Form Dialog - Pass selectedDate */}
+      {/* Dialogs */}
       <EventForm
         isOpen={isEventFormOpen}
         onOpenChange={setIsEventFormOpen}
         event={selectedEvent}
-        selectedDate={selectedDate} // Pass the currently selected date
+        selectedDate={selectedDate}
         onSave={handleSaveEvent}
         onDelete={handleDeleteEvent}
       />
-       {/* Todo Form Dialog - Pass selectedDate */}
        <TodoForm
          isOpen={isTodoFormOpen}
          onOpenChange={setIsTodoFormOpen}
          todo={selectedTodo}
-         selectedDate={selectedDate} // Pass the currently selected date
+         selectedDate={selectedDate}
          onSave={handleSaveTodo}
          onDelete={handleDeleteTodo}
        />
@@ -355,5 +475,3 @@ export default function ChronoZenCalendar() {
     </div>
   );
 }
-
-    

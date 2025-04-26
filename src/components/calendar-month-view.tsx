@@ -1,7 +1,7 @@
 
 "use client";
 
-import type { FC } from "react";
+import React, { type FC } from "react"; // Import React
 import {
   format,
   startOfMonth,
@@ -16,30 +16,30 @@ import {
   subMonths,
 } from "date-fns";
 
-import type { CalendarEvent, TodoItem } from "@/lib/types"; // Added TodoItem
+import type { CalendarEvent, TodoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ChevronLeft, ChevronRight, CheckSquare } from "lucide-react"; // Added CheckSquare
+import { ChevronLeft, ChevronRight, CheckSquare } from "lucide-react";
 
 interface CalendarMonthViewProps {
   date: Date;
   events: CalendarEvent[];
-  todos: TodoItem[]; // Added todos prop
+  todos: TodoItem[];
   onDateChange: (newDate: Date) => void;
   onEventClick: (event: CalendarEvent) => void;
   onDateClick: (date: Date) => void;
-  onTodoClick: (todo: TodoItem) => void; // Added handler
+  onTodoClick: (todo: TodoItem) => void;
 }
 
 const CalendarMonthView: FC<CalendarMonthViewProps> = ({
   date,
   events,
-  todos, // Destructure todos
+  todos,
   onDateChange,
   onEventClick,
   onDateClick,
-  onTodoClick, // Destructure handler
+  onTodoClick,
 }) => {
   const monthStart = startOfMonth(date);
   const monthEnd = endOfMonth(date);
@@ -48,9 +48,14 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
 
   const days = eachDayOfInterval({ start: startDate, end: endDate });
 
+  // Filter events and todos only once per render cycle for the current month
+  const monthEvents = React.useMemo(() => events.filter(event => isSameMonth(new Date(event.date + 'T00:00:00'), date)), [events, date]);
+  const monthTodos = React.useMemo(() => todos.filter(todo => isSameMonth(new Date(todo.date + 'T00:00:00'), date)), [todos, date]);
+
+
   const getEventsForDay = (day: Date): CalendarEvent[] => {
     const dayFormatted = format(day, 'yyyy-MM-dd');
-    return events
+    return monthEvents // Use pre-filtered month events
       .filter((event) => event.date === dayFormatted)
       .sort((a, b) => {
          if (a.allDay && !b.allDay) return -1;
@@ -61,7 +66,7 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
 
   const getTodosForDay = (day: Date): TodoItem[] => {
     const dayFormatted = format(day, 'yyyy-MM-dd');
-    return todos.filter((todo) => todo.date === dayFormatted);
+    return monthTodos.filter((todo) => todo.date === dayFormatted); // Use pre-filtered month todos
   };
 
   const handlePrevMonth = () => {
@@ -80,90 +85,96 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
         <Button variant="ghost" size="icon" onClick={handlePrevMonth} aria-label="Previous month">
           <ChevronLeft className="h-5 w-5" />
         </Button>
-        <CardTitle className="text-xl font-semibold">{format(date, "MMMM yyyy")}</CardTitle>
+        <CardTitle className="text-base sm:text-xl font-semibold">{format(date, "MMMM yyyy")}</CardTitle>
         <Button variant="ghost" size="icon" onClick={handleNextMonth} aria-label="Next month">
           <ChevronRight className="h-5 w-5" />
         </Button>
       </CardHeader>
       <CardContent className="flex-grow p-0 overflow-hidden">
+        {/* Sticky Weekday Header */}
         <div className="grid grid-cols-7 border-b sticky top-0 bg-card z-10">
           {weekDays.map((day) => (
-            <div key={day} className="text-center p-2 text-xs font-medium text-muted-foreground">
+            <div key={day} className="text-center p-1 sm:p-2 text-[10px] sm:text-xs font-medium text-muted-foreground">
               {day}
             </div>
           ))}
         </div>
-        <div className="grid grid-rows-auto grid-cols-7 h-[calc(100%-2.5rem)]">
-          {days.map((day) => {
+        {/* Calendar Grid - Allow scrolling within the content area */}
+        <div className="grid grid-cols-7 h-[calc(100%-2rem)] sm:h-[calc(100%-2.5rem)] overflow-y-auto">
+          {days.map((day, index) => {
             const dayEvents = getEventsForDay(day);
-            const dayTodos = getTodosForDay(day); // Get todos for the day
+            const dayTodos = getTodosForDay(day);
             const isCurrentMonth = isSameMonth(day, date);
             const isCurrentDay = isToday(day);
-            const totalItems = dayEvents.length + dayTodos.length; // Combined count
+            const totalItems = dayEvents.length + dayTodos.length;
+            // Determine max items to show based on screen size (example)
+            const maxItemsToShow = 2; // Simple approach, could be more dynamic
 
             return (
               <div
                 key={day.toString()}
                 className={cn(
-                  "border-r border-b p-1.5 flex flex-col relative min-h-[6rem] cursor-pointer hover:bg-accent/5 transition-colors",
-                  !isCurrentMonth && "bg-muted/30 text-muted-foreground",
-                  "last:border-r-0"
+                  "border-b p-1 flex flex-col relative min-h-[4rem] sm:min-h-[6rem] cursor-pointer hover:bg-accent/5 transition-colors",
+                   // Add right border to all but the last column in a row
+                   (index + 1) % 7 !== 0 && "border-r",
+                  !isCurrentMonth && "bg-muted/30 text-muted-foreground/50", // Dim non-month days
+                  isCurrentMonth && "text-foreground",
+                  "hover:z-10 hover:shadow-md" // Elevate on hover slightly
                 )}
                  onClick={() => onDateClick(day)}
                  role="button"
                  tabIndex={0}
                  aria-label={`Date ${format(day, "MMMM d")}, ${dayEvents.length} events, ${dayTodos.length} todos`}
               >
+                {/* Date Number */}
                 <span
                   className={cn(
-                    "self-start text-xs font-medium mb-1",
-                    isCurrentDay && "bg-primary text-primary-foreground rounded-full h-5 w-5 flex items-center justify-center"
+                    "self-start text-[10px] sm:text-xs font-medium mb-0.5 sm:mb-1 w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center rounded-full",
+                    isCurrentDay && "bg-primary text-primary-foreground",
+                    !isCurrentMonth && "opacity-50" // Further dim non-month date numbers
                   )}
                 >
                   {format(day, "d")}
                 </span>
-                <div className="flex-grow overflow-y-auto space-y-0.5 max-h-[calc(100%-1.25rem)]">
+                {/* Events and Todos Area */}
+                <div className="flex-grow overflow-y-auto space-y-0.5 text-[9px] sm:text-[10px] leading-tight">
                   {/* Display Events */}
-                  {dayEvents.slice(0, 2).map((event) => ( // Show max 2 events initially
+                  {dayEvents.slice(0, maxItemsToShow).map((event) => (
                     <div
                       key={event.id}
                       className={cn(
-                        "text-[10px] leading-tight p-0.5 rounded truncate cursor-pointer",
+                        "p-0.5 rounded truncate cursor-pointer",
                          event.allDay ? "bg-accent/20 text-accent-foreground" : "bg-primary/20 text-primary-foreground",
-                         "hover:opacity-80"
+                         "hover:opacity-80",
+                         !isCurrentMonth && "opacity-60" // Dim items in non-month days
                       )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onEventClick(event);
-                      }}
+                      onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
                       title={event.title}
                       role="button"
                       tabIndex={0}
                       aria-label={`Event: ${event.title}`}
                     >
-                       {!event.allDay && event.startTime && <span className="font-semibold mr-1">{event.startTime}</span>}
+                       {!event.allDay && event.startTime && <span className="font-semibold mr-0.5">{event.startTime}</span>}
                       {event.title}
                     </div>
                   ))}
-                   {/* Display Todos - Show max 1 todo initially if space allows */}
-                   {dayEvents.length < 2 && dayTodos.slice(0, 1).map((todo) => (
+                   {/* Display Todos - Show if space allows */}
+                   {dayEvents.length < maxItemsToShow && dayTodos.slice(0, maxItemsToShow - dayEvents.length).map((todo) => (
                       <div
                         key={todo.id}
                         className={cn(
-                          "text-[10px] leading-tight p-0.5 rounded truncate cursor-pointer flex items-center",
-                          "bg-secondary/50 text-secondary-foreground", // Different style for todos
-                          "hover:opacity-80"
+                          "p-0.5 rounded truncate cursor-pointer flex items-center",
+                          "bg-secondary/50 text-secondary-foreground",
+                          "hover:opacity-80",
+                          !isCurrentMonth && "opacity-60" // Dim items in non-month days
                         )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTodoClick(todo); // Use onTodoClick
-                        }}
+                        onClick={(e) => { e.stopPropagation(); onTodoClick(todo); }}
                         title={todo.title}
                         role="button"
                         tabIndex={0}
                         aria-label={`Todo: ${todo.title}`}
                       >
-                         <CheckSquare className={cn("h-2.5 w-2.5 mr-1 flex-shrink-0", todo.completed ? "text-green-600" : "text-muted-foreground")} />
+                         <CheckSquare className={cn("h-2 w-2 sm:h-2.5 sm:w-2.5 mr-0.5 sm:mr-1 flex-shrink-0", todo.completed ? "text-green-600" : "text-muted-foreground")} />
                         <span className={cn(todo.completed && "line-through text-muted-foreground")}>
                           {todo.title}
                         </span>
@@ -171,9 +182,13 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
                    ))}
 
                   {/* Show "+X more" indicator */}
-                  {totalItems > (dayEvents.length < 2 ? 3 : 2) && ( // Adjust limit based on displayed items
-                     <div className="text-[10px] text-muted-foreground mt-0.5">
-                         +{totalItems - (dayEvents.length < 2 ? (dayEvents.length + dayTodos.slice(0,1).length) : dayEvents.length) } more
+                  {totalItems > maxItemsToShow && (
+                     <div className={cn(
+                         "text-[9px] sm:text-[10px] text-muted-foreground mt-0.5",
+                          !isCurrentMonth && "opacity-60" // Dim indicator too
+                         )}
+                     >
+                         +{totalItems - maxItemsToShow} more
                      </div>
                    )}
                 </div>
@@ -187,3 +202,5 @@ const CalendarMonthView: FC<CalendarMonthViewProps> = ({
 };
 
 export default CalendarMonthView;
+
+    

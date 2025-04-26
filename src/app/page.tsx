@@ -20,7 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 
 type View = "month" | "week" | "day";
 
-export default function ChronoZenCalendar() {
+export default function ARCalendar() { // Changed component name
   const [selectedDate, setSelectedDate] = useState<Date>(startOfDay(new Date()));
   const [currentView, setCurrentView] = useState<View>("month");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -141,7 +141,7 @@ export default function ChronoZenCalendar() {
   return (
     <div className="flex h-screen flex-col p-4 md:p-6 bg-secondary/30">
       <header className="flex items-center justify-between pb-4 mb-4 border-b">
-        <h1 className="text-2xl font-bold text-primary">ChronoZen Calendar</h1>
+        <h1 className="text-2xl font-bold text-primary">AR Calendar</h1> {/* Changed header title */}
         <div className="flex items-center gap-2">
           <Popover>
             <PopoverTrigger asChild>

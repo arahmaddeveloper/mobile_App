@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'ChronoZen Calendar',
+  title: 'AR Calendar', // Changed title
   description: 'Your intuitive calendar app for managing events.',
 };
 

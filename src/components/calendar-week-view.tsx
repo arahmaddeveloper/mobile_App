@@ -1,5 +1,6 @@
-"use client";
+ "use client";
 
+import * as React from "react"; // Added missing React import
 import type { FC } from "react";
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, addDays, isSameDay, isSameMonth, getDay, addHours, startOfDay } from "date-fns";
 

@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react"; // Added missing React import
 import type { FC } from "react";
 import { format, startOfDay, addHours } from "date-fns";
 
